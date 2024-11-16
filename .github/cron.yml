@@ -1,0 +1,30 @@
+name: Track Profile Activity
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  
+  workflow_dispatch:
+
+jobs:
+  track-activity:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+        
+    - name: Get Dependencies
+      run: |
+        go mod init MridulDhiman/cron-latest-repos
+        go get -u github.com/google/go-github/v45/github
+        go get -u github.com/joho/godotenv
+        go get -u golang.org/x/oauth2
+
+    - name: Run Activity Tracker
+      env:
+        GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      run: go run main.go

@@ -1,47 +1,39 @@
 package main
 
 import (
-    "context"
-    "fmt"
-    "log"
-    "os"
-    "time"
-    "strings"
-    
-    "github.com/google/go-github/v45/github"
-    "github.com/robfig/cron/v3"
-    "golang.org/x/oauth2"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/google/go-github/v45/github"
+	"github.com/joho/godotenv"
+	"golang.org/x/oauth2"
 )
 
 type RepoActivity struct {
     Name string
     LastCommitTime time.Time
+	Description string
 }
 
+func init() {
+	if err := godotenv.Load(); err != nil {
+		fmt.Println("could not load env. variables", err)
+	}
+}
 func main() {
-    // GitHub token should be set as an environment variable
     token := os.Getenv("GITHUB_TOKEN")
     if token == "" {
         log.Fatal("GITHUB_TOKEN environment variable is required")
     }
 
-    c := cron.New()
-    
-    // Schedule the job to run every 24 hours
-    _, err := c.AddFunc("@daily", func() {
         if err := trackGitHubActivity(token); err != nil {
             log.Printf("Error tracking GitHub activity: %v", err)
         }
-    })
-    
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    c.Start()
-    
-    // Keep the program running
-    select {}
+   
 }
 
 func trackGitHubActivity(token string) error {
@@ -111,9 +103,11 @@ func getRecentlyActiveRepos(ctx context.Context, client *github.Client, username
             }
 
             if len(commits) > 0 {
+				
                 activeRepos = append(activeRepos, RepoActivity{
                     Name: repo.GetName(),
                     LastCommitTime: commits[0].Commit.Author.GetDate(),
+					Description: repo.GetDescription(),
                 })
             }
         }
@@ -129,13 +123,34 @@ func getRecentlyActiveRepos(ctx context.Context, client *github.Client, username
 
 func createCommitMessage(repos []RepoActivity) string {
     var sb strings.Builder
-    sb.WriteString("Recent repository activity:\n\n")
-    
+    sb.WriteString(`
+Currently exploring backend, devops and genai stuff.
+
+repos I'm currently working on:
+	`);
+
+	
     for _, repo := range repos {
-        sb.WriteString(fmt.Sprintf("- %s (Last commit: %s)\n", 
-            repo.Name, 
-            repo.LastCommitTime.Format("2006-01-02 15:04:05")))
+		if repo.Name != "MridulDhiman" {
+			sb.WriteString(fmt.Sprintf("\n- <a href='https://github.com/MridulDhiman/%s'>%s</a>: %s", 
+				repo.Name, repo.Name, repo.Description))
+		}
     }
+
+	sb.WriteString(`
+
+Other Projects: 
+- <a href="https://github.com/MridulDhiman/remote-code-execution-engine">remote-code-execution-engine</a>: multithreaded code execution API in golang.
+- <a href="https://github.com/MridulDhiman/goexpress">goexpress</a>: express.js implementation in golang
+- <a href="https://github.com/MridulDhiman/aws.tf">aws.tf</a>: Basic AWS terraform scripts
+- <a href="https://github.com/MridulDhiman/source-shift">source-shift</a>: Simple Transpiler in JS
+- <a href="https://github.com/MridulDhiman/zanpakuto">zanpakuto</a>: Forge templates through scripts
+- <a href="https://github.com/MridulDhiman/BBCalendar">bbcalendar</a>: CLI based Calendar application written in C
+
+Open Source Contributions:
+- <a href="https://github.com/glasskube/glasskube/issues?q=is%3Aissue+assignee%3AMridulDhiman+is%3Aclosed">glasskube</a>
+
+Check out my blogs <a href="https://mridul.bearblog.dev">here</a>.`)
     
     return sb.String()
 }
@@ -150,7 +165,7 @@ func updateTrackingRepo(ctx context.Context, client *github.Client, message stri
     // Create a tree with the new file
     tree, _, err := client.Git.CreateTree(ctx, "MridulDhiman", "MridulDhiman", *ref.Object.SHA, []*github.TreeEntry{
         {
-            Path:    github.String("activity.md"),
+            Path:    github.String("README.md"),
             Mode:    github.String("100644"),
             Type:    github.String("blob"),
             Content: github.String(message),
