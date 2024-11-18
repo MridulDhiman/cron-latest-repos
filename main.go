@@ -56,10 +56,10 @@ func trackGitHubActivity(token string) error {
         return fmt.Errorf("failed to get active repos: %v", err)
     }
 
-    if len(repos) == 0 {
+    if len(repos) == 0 || (len(repos) == 1 && repos[0].Name == "MridulDhiman") {
         log.Println("No repository activity in the last 24 hours")
         return nil
-    }
+    } 
 
     // Create commit message with the list of active repositories
     message := createCommitMessage(repos)
