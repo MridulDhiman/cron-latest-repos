@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -51,18 +52,28 @@ func trackGitHubActivity(token string) error {
     }
 
     // Get all repositories where the user has pushed in the last 24 hours
-    repos, err := getRecentlyActiveRepos(ctx, client, user.GetLogin())
+    lastMonthRepos, err := getLastMonthRepos(ctx, client, user.GetLogin())
     if err != nil {
         return fmt.Errorf("failed to get active repos: %v", err)
     }
 
-    if len(repos) == 0 || (len(repos) == 1 && repos[0].Name == "MridulDhiman") {
+    if  len(lastMonthRepos) == 0 || (len(lastMonthRepos) == 1 && lastMonthRepos[0].Name == "MridulDhiman") {
+        log.Println("No repository activity in the last 24 hours")
+        return nil
+    } 
+    repos, err := getRecentlyActiveRepos(ctx, lastMonthRepos, client, user.GetLogin())
+
+    if err != nil {
+        return fmt.Errorf("failed to get active repos: %v", err)
+    }
+
+    if  len(repos) == 0 || (len(repos) == 1 && repos[0].Name == "MridulDhiman") {
         log.Println("No repository activity in the last 24 hours")
         return nil
     } 
 
     // Create commit message with the list of active repositories
-    message := createCommitMessage(repos)
+    message := createCommitMessage(repos, lastMonthRepos)
 
     // Update the tracking repository
     err = updateTrackingRepo(ctx, client, message)
@@ -73,7 +84,7 @@ func trackGitHubActivity(token string) error {
     return nil
 }
 
-func getRecentlyActiveRepos(ctx context.Context, client *github.Client, username string) ([]RepoActivity, error) {
+func getRecentlyActiveRepos(ctx context.Context, lastMonthRepos []RepoActivity,   client *github.Client, username string) ([]RepoActivity, error) {
     // Time 24 hours ago
     since := time.Now().Add(-24 * time.Hour)
     
@@ -103,12 +114,17 @@ func getRecentlyActiveRepos(ctx context.Context, client *github.Client, username
             }
 
             if len(commits) > 0 {
-				
-                activeRepos = append(activeRepos, RepoActivity{
-                    Name: repo.GetName(),
-                    LastCommitTime: commits[0].Commit.Author.GetDate(),
-					Description: repo.GetDescription(),
-                })
+                fmt.Println("Repo Visibility: ", repo.GetVisibility())
+				if repo.GetVisibility() != "private" {
+                    newRepoActivity := RepoActivity{
+                        Name: repo.GetName(),
+                        LastCommitTime: commits[0].Commit.Author.GetDate(),
+                        Description: repo.GetDescription(),
+                    }
+                    if !slices.Contains(lastMonthRepos, newRepoActivity) {
+                        activeRepos = append(activeRepos, newRepoActivity)
+                    }
+                }
             }
         }
 
@@ -121,7 +137,56 @@ func getRecentlyActiveRepos(ctx context.Context, client *github.Client, username
     return activeRepos, nil
 }
 
-func createCommitMessage(repos []RepoActivity) string {
+func getLastMonthRepos(ctx context.Context, client *github.Client, username string) ([]RepoActivity, error) {
+    // Time 24 hours ago
+    since := time.Now().AddDate(0, -1, 0)
+    // List all repositories for the user
+    opt := &github.RepositoryListOptions{
+        ListOptions: github.ListOptions{PerPage: 100},
+    }
+
+    var activeRepos []RepoActivity
+
+    for {
+        repos, resp, err := client.Repositories.List(ctx, username, opt)
+        if err != nil {
+            return nil, err
+        }
+
+        for _, repo := range repos {
+            // Get commits for each repository
+            commits, _, err := client.Repositories.ListCommits(ctx, username, repo.GetName(), &github.CommitsListOptions{
+                Since: since,
+                Author: username,
+            })
+            
+            if err != nil {
+                log.Printf("Error getting commits for %s: %v", repo.GetName(), err)
+                continue
+            }
+
+            if len(commits) > 0 {
+                fmt.Println("Repo Visibility: ", repo.GetVisibility())
+				if repo.GetVisibility() != "private"  {
+                    newRepoActivity := RepoActivity{
+                        Name: repo.GetName(),
+                        LastCommitTime: commits[0].Commit.Author.GetDate(),
+                        Description: repo.GetDescription(),
+                    }
+                        activeRepos = append(activeRepos, newRepoActivity)
+                }
+            }
+        }
+
+        if resp.NextPage == 0 {
+            break
+        }
+        opt.Page = resp.NextPage
+    }
+
+    return activeRepos, nil
+}
+func createCommitMessage(repos []RepoActivity, lastMonthRepos []RepoActivity) string {
     var sb strings.Builder
     sb.WriteString(`
 Currently exploring backend, devops and genai stuff.
@@ -131,21 +196,25 @@ repos I'm currently working on:
 
 	
     for _, repo := range repos {
-		if repo.Name != "MridulDhiman" {
+		if repo.Name != "MridulDhiman"  {
 			sb.WriteString(fmt.Sprintf("\n- <a href='https://github.com/MridulDhiman/%s'>%s</a>: %s", 
 				repo.Name, repo.Name, repo.Description))
 		}
     }
 
-	sb.WriteString(`
+    sb.WriteString(`
 
 Other Projects: 
-- <a href="https://github.com/MridulDhiman/remote-code-execution-engine">remote-code-execution-engine</a>: multithreaded code execution API in golang.
-- <a href="https://github.com/MridulDhiman/goexpress">goexpress</a>: express.js implementation in golang
-- <a href="https://github.com/MridulDhiman/aws.tf">aws.tf</a>: Basic AWS terraform scripts
-- <a href="https://github.com/MridulDhiman/source-shift">source-shift</a>: Simple Transpiler in JS
-- <a href="https://github.com/MridulDhiman/zanpakuto">zanpakuto</a>: Forge templates through scripts
-- <a href="https://github.com/MridulDhiman/BBCalendar">bbcalendar</a>: CLI based Calendar application written in C
+    `);
+
+    for _, repo := range lastMonthRepos {
+		if repo.Name != "MridulDhiman" {
+			sb.WriteString(fmt.Sprintf("\n- <a href='https://github.com/MridulDhiman/%s'>%s</a>: %s", 
+				repo.Name, repo.Name, repo.Description))
+		}
+    }
+    
+	sb.WriteString(`
 
 Open Source Contributions:
 - <a href="https://github.com/glasskube/glasskube/issues?q=is%3Aissue+assignee%3AMridulDhiman+is%3Aclosed">glasskube</a>
