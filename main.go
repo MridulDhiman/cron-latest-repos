@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -57,11 +56,15 @@ func trackGitHubActivity(token string) error {
         return fmt.Errorf("failed to get active repos: %v", err)
     }
 
+    fmt.Println("Last Month Repos: ", lastMonthRepos)
+
     if  len(lastMonthRepos) == 0 || (len(lastMonthRepos) == 1 && lastMonthRepos[0].Name == "MridulDhiman") {
         log.Println("No repository activity in the last 24 hours")
         return nil
     } 
-    repos, err := getRecentlyActiveRepos(ctx, lastMonthRepos, client, user.GetLogin())
+
+    repos, err := getRecentlyActiveRepos(ctx, client, user.GetLogin())
+    fmt.Println("Latest Repos: ", repos)
 
     if err != nil {
         return fmt.Errorf("failed to get active repos: %v", err)
@@ -84,7 +87,7 @@ func trackGitHubActivity(token string) error {
     return nil
 }
 
-func getRecentlyActiveRepos(ctx context.Context, lastMonthRepos []RepoActivity,   client *github.Client, username string) ([]RepoActivity, error) {
+func getRecentlyActiveRepos(ctx context.Context, client *github.Client, username string) ([]RepoActivity, error) {
     // Time 24 hours ago
     since := time.Now().Add(-24 * time.Hour)
     
@@ -114,16 +117,12 @@ func getRecentlyActiveRepos(ctx context.Context, lastMonthRepos []RepoActivity, 
             }
 
             if len(commits) > 0 {
-                fmt.Println("Repo Visibility: ", repo.GetVisibility())
-				if repo.GetVisibility() != "private" {
-                    newRepoActivity := RepoActivity{
-                        Name: repo.GetName(),
-                        LastCommitTime: commits[0].Commit.Author.GetDate(),
-                        Description: repo.GetDescription(),
-                    }
-                    if !slices.Contains(lastMonthRepos, newRepoActivity) {
-                        activeRepos = append(activeRepos, newRepoActivity)
-                    }
+				if repo.GetVisibility() == "public" {
+                        activeRepos = append(activeRepos, RepoActivity{
+                            Name: repo.GetName(),
+                            LastCommitTime: commits[0].Commit.Author.GetDate(),
+                            Description: repo.GetDescription(),
+                        })
                 }
             }
         }
@@ -166,14 +165,12 @@ func getLastMonthRepos(ctx context.Context, client *github.Client, username stri
             }
 
             if len(commits) > 0 {
-                fmt.Println("Repo Visibility: ", repo.GetVisibility())
-				if repo.GetVisibility() != "private"  {
-                    newRepoActivity := RepoActivity{
-                        Name: repo.GetName(),
-                        LastCommitTime: commits[0].Commit.Author.GetDate(),
-                        Description: repo.GetDescription(),
-                    }
-                        activeRepos = append(activeRepos, newRepoActivity)
+				if repo.GetVisibility() == "public"  {
+                        activeRepos = append(activeRepos, RepoActivity{
+                            Name: repo.GetName(),
+                            LastCommitTime: commits[0].Commit.Author.GetDate(),
+                            Description: repo.GetDescription(),
+                        })
                 }
             }
         }
@@ -204,7 +201,7 @@ repos I'm currently working on:
 
     sb.WriteString(`
 
-Other Projects: 
+Main Projects: 
     `);
 
     for _, repo := range lastMonthRepos {
