@@ -117,7 +117,7 @@ func getRecentlyActiveRepos(ctx context.Context, client *github.Client, username
             }
 
             if len(commits) > 0 {
-				if repo.GetVisibility() == "public" {
+				if repo.GetVisibility() == "public" && repo.GetDescription() != "" {
                         activeRepos = append(activeRepos, RepoActivity{
                             Name: repo.GetName(),
                             LastCommitTime: commits[0].Commit.Author.GetDate(),
@@ -165,7 +165,7 @@ func getLastMonthRepos(ctx context.Context, client *github.Client, username stri
             }
 
             if len(commits) > 0 {
-				if repo.GetVisibility() == "public"  {
+				if repo.GetVisibility() == "public"  && repo.GetDescription() != "" {
                         activeRepos = append(activeRepos, RepoActivity{
                             Name: repo.GetName(),
                             LastCommitTime: commits[0].Commit.Author.GetDate(),
