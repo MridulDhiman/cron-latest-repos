@@ -14,9 +14,10 @@ import (
 )
 
 type RepoActivity struct {
-    Name string
-    LastCommitTime time.Time
-	Description string
+	Name           string
+	LastCommitTime time.Time
+	Description    string
+	OrgName        string // Added to store organization name
 }
 
 func init() {
@@ -24,201 +25,164 @@ func init() {
 		fmt.Println("could not load env. variables", err)
 	}
 }
-func main() {
-    token := os.Getenv("GITHUB_TOKEN")
-    if token == "" {
-        log.Fatal("GITHUB_TOKEN environment variable is required")
-    }
 
-        if err := trackGitHubActivity(token); err != nil {
-            log.Printf("Error tracking GitHub activity: %v", err)
-        }
-   
+func main() {
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		log.Fatal("GITHUB_TOKEN environment variable is required")
+	}
+
+	if err := trackGitHubActivity(token); err != nil {
+		log.Printf("Error tracking GitHub activity: %v", err)
+	}
 }
 
 func trackGitHubActivity(token string) error {
-    ctx := context.Background()
-    ts := oauth2.StaticTokenSource(
-        &oauth2.Token{AccessToken: token},
-    )
-    tc := oauth2.NewClient(ctx, ts)
-    client := github.NewClient(tc)
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
 
-    // Get authenticated user
-    user, _, err := client.Users.Get(ctx, "")
-    if err != nil {
-        return fmt.Errorf("failed to get user: %v", err)
-    }
+	// Get authenticated user
+	user, _, err := client.Users.Get(ctx, "")
+	if err != nil {
+		return fmt.Errorf("failed to get user: %v", err)
+	}
 
-    // Get all repositories where the user has pushed in the last 24 hours
-    lastMonthRepos, err := getLastMonthRepos(ctx, client, user.GetLogin())
-    if err != nil {
-        return fmt.Errorf("failed to get active repos: %v", err)
-    }
+	lastMonthRepos, err := getActiveRepos(ctx, client, user.GetLogin(), 30)
+	if err != nil {
+		return fmt.Errorf("failed to get last month repos: %v", err)
+	}
 
-    fmt.Println("Last Month Repos: ", lastMonthRepos)
+	recentRepos, err := getActiveRepos(ctx, client, user.GetLogin(), 1)
+	if err != nil {
+		return fmt.Errorf("failed to get recent repos: %v", err)
+	}
 
-    if  len(lastMonthRepos) == 0 || (len(lastMonthRepos) == 1 && lastMonthRepos[0].Name == "MridulDhiman") {
-        log.Println("No repository activity in the last 24 hours")
-        return nil
-    } 
+	message := createCommitMessage(recentRepos, lastMonthRepos)
+	err = updateTrackingRepo(ctx, client, message)
+	if err != nil {
+		return fmt.Errorf("failed to update tracking repo: %v", err)
+	}
 
-    repos, err := getRecentlyActiveRepos(ctx, client, user.GetLogin())
-    fmt.Println("Latest Repos: ", repos)
-
-    if err != nil {
-        return fmt.Errorf("failed to get active repos: %v", err)
-    }
-
-    if  len(repos) == 0 || (len(repos) == 1 && repos[0].Name == "MridulDhiman") {
-        log.Println("No repository activity in the last 24 hours")
-        return nil
-    } 
-
-    // Create commit message with the list of active repositories
-    message := createCommitMessage(repos, lastMonthRepos)
-
-    // Update the tracking repository
-    err = updateTrackingRepo(ctx, client, message)
-    if err != nil {
-        return fmt.Errorf("failed to update tracking repo: %v", err)
-    }
-
-    return nil
+	return nil
 }
 
-func getRecentlyActiveRepos(ctx context.Context, client *github.Client, username string) ([]RepoActivity, error) {
-    // Time 24 hours ago
-    since := time.Now().Add(-24 * time.Hour)
-    
-    // List all repositories for the user
-    opt := &github.RepositoryListOptions{
-        ListOptions: github.ListOptions{PerPage: 100},
-    }
+func getActiveRepos(ctx context.Context, client *github.Client, username string, daysAgo int) ([]RepoActivity, error) {
+	since := time.Now().AddDate(0, 0, -daysAgo)
+	activeRepos := make(map[string]RepoActivity) // Use map to prevent duplicates
 
-    var activeRepos []RepoActivity
+	opt := &github.ListOptions{PerPage: 100}
+	
+	for {
+		events, resp, err := client.Activity.ListEventsPerformedByUser(ctx, username, false, opt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list events: %v", err)
+		}
 
-    for {
-        repos, resp, err := client.Repositories.List(ctx, username, opt)
-        if err != nil {
-            return nil, err
-        }
+		for _, event := range events {
+			// Skip events older than our time window
+			if event.GetCreatedAt().Before(since) {
+				continue
+			}
 
-        for _, repo := range repos {
-            // Get commits for each repository
-            commits, _, err := client.Repositories.ListCommits(ctx, username, repo.GetName(), &github.CommitsListOptions{
-                Since: since,
-                Author: username,
-            })
-            
-            if err != nil {
-                log.Printf("Error getting commits for %s: %v", repo.GetName(), err)
-                continue
-            }
+			// We're primarily interested in PushEvents and PullRequestEvents
+			if event.GetType() != "PushEvent" && event.GetType() != "PullRequestEvent" {
+				continue
+			}
 
-            if len(commits) > 0 {
-				if repo.GetVisibility() == "public" && repo.GetDescription() != "" {
-                        activeRepos = append(activeRepos, RepoActivity{
-                            Name: repo.GetName(),
-                            LastCommitTime: commits[0].Commit.Author.GetDate(),
-                            Description: repo.GetDescription(),
-                        })
-                }
-            }
-        }
+			repo := event.GetRepo()
+			if repo == nil {
+				continue
+			}
 
-        if resp.NextPage == 0 {
-            break
-        }
-        opt.Page = resp.NextPage
-    }
+			// Parse owner and repo name from repo.Name (format: "owner/repo")
+			parts := strings.Split(repo.GetName(), "/")
+			if len(parts) != 2 {
+				continue
+			}
+			owner, repoName := parts[0], parts[1]
 
-    return activeRepos, nil
+			// Skip if we already have this repo
+			if _, exists := activeRepos[repo.GetName()]; exists {
+				continue
+			}
+
+			// Get repository details
+			repoDetails, _, err := client.Repositories.Get(ctx, owner, repoName)
+			if err != nil {
+				log.Printf("Error getting details for %s: %v", repo.GetName(), err)
+				continue
+			}
+
+			if repoDetails.GetVisibility() == "public" && repoDetails.GetDescription() != "" {
+				activeRepos[repo.GetName()] = RepoActivity{
+					Name:           repoName,
+					LastCommitTime: event.GetCreatedAt(),
+					Description:    repoDetails.GetDescription(),
+					OrgName:        owner,
+				}
+			}
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+
+	// Convert map to slice
+	result := make([]RepoActivity, 0, len(activeRepos))
+	for _, repo := range activeRepos {
+		result = append(result, repo)
+	}
+
+	return result, nil
 }
 
-func getLastMonthRepos(ctx context.Context, client *github.Client, username string) ([]RepoActivity, error) {
-    // Time 24 hours ago
-    since := time.Now().AddDate(0, -1, 0)
-    // List all repositories for the user
-    opt := &github.RepositoryListOptions{
-        ListOptions: github.ListOptions{PerPage: 100},
-    }
-
-    var activeRepos []RepoActivity
-
-    for {
-        repos, resp, err := client.Repositories.List(ctx, username, opt)
-        if err != nil {
-            return nil, err
-        }
-
-        for _, repo := range repos {
-            // Get commits for each repository
-            commits, _, err := client.Repositories.ListCommits(ctx, username, repo.GetName(), &github.CommitsListOptions{
-                Since: since,
-                Author: username,
-            })
-            
-            if err != nil {
-                log.Printf("Error getting commits for %s: %v", repo.GetName(), err)
-                continue
-            }
-
-            if len(commits) > 0 {
-				if repo.GetVisibility() == "public"  && repo.GetDescription() != "" {
-                        activeRepos = append(activeRepos, RepoActivity{
-                            Name: repo.GetName(),
-                            LastCommitTime: commits[0].Commit.Author.GetDate(),
-                            Description: repo.GetDescription(),
-                        })
-                }
-            }
-        }
-
-        if resp.NextPage == 0 {
-            break
-        }
-        opt.Page = resp.NextPage
-    }
-
-    return activeRepos, nil
-}
 func createCommitMessage(repos []RepoActivity, lastMonthRepos []RepoActivity) string {
-    var sb strings.Builder
-    sb.WriteString(`
+	var sb strings.Builder
+	sb.WriteString(`
 Currently exploring backend, devops and genai stuff.
 
-repos I'm currently working on:
-	`);
+Repos I'm currently working on:
+	`)
 
-	
-    for _, repo := range repos {
-		if repo.Name != "MridulDhiman"  {
-			sb.WriteString(fmt.Sprintf("\n- <a href='https://github.com/MridulDhiman/%s'>%s</a>: %s", 
+	for _, repo := range repos {
+		if repo.OrgName == "MridulDhiman" {
+			sb.WriteString(fmt.Sprintf("\n- <a href='https://github.com/MridulDhiman/%s'>%s</a>: %s",
 				repo.Name, repo.Name, repo.Description))
+		} else {
+			sb.WriteString(fmt.Sprintf("\n- <a href='https://github.com/%s/%s'>%s</a>: %s",
+				repo.OrgName, repo.Name, repo.Name, repo.Description))
 		}
-    }
+	}
 
-    sb.WriteString(`
+	sb.WriteString(`
 
-Main Projects: 
-    `);
+Actively Committed Repos(since last month): 
+    `)
 
-    for _, repo := range lastMonthRepos {
-		if repo.Name != "MridulDhiman" {
-			sb.WriteString(fmt.Sprintf("\n- <a href='https://github.com/MridulDhiman/%s'>%s</a>: %s", 
+	for _, repo := range lastMonthRepos {
+		if repo.OrgName == "MridulDhiman" {
+			sb.WriteString(fmt.Sprintf("\n- <a href='https://github.com/MridulDhiman/%s'>%s</a>: %s",
 				repo.Name, repo.Name, repo.Description))
+		} else {
+			sb.WriteString(fmt.Sprintf("\n- <a href='https://github.com/%s/%s'>%s</a>: %s",
+				repo.OrgName, repo.Name, repo.Name, repo.Description))
 		}
-    }
-    
+	}
+
 	sb.WriteString(`
 
 Open Source Contributions:
 - <a href="https://github.com/glasskube/glasskube/issues?q=is%3Aissue+assignee%3AMridulDhiman+is%3Aclosed">glasskube</a>
 
 Check out my blogs <a href="https://mridul.bearblog.dev">here</a>.`)
-    
-    return sb.String()
+
+	return sb.String()
 }
 
 func updateTrackingRepo(ctx context.Context, client *github.Client, message string) error {
