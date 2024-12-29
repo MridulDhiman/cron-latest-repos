@@ -14,6 +14,7 @@ import (
 )
 
 type RepoActivity struct {
+	ID int64
 	Name           string
 	LastCommitTime time.Time
 	Description    string
@@ -73,6 +74,7 @@ func trackGitHubActivity(token string) error {
 func getActiveRepos(ctx context.Context, client *github.Client, username string, daysAgo int) ([]RepoActivity, error) {
 	since := time.Now().AddDate(0, 0, -daysAgo)
 	activeRepos := make(map[string]RepoActivity) // Use map to prevent duplicates
+	distinctRepos := make(map[int64]bool)
 
 	opt := &github.ListOptions{PerPage: 100}
 	
@@ -118,11 +120,17 @@ func getActiveRepos(ctx context.Context, client *github.Client, username string,
 			}
 
 			if repoDetails.GetVisibility() == "public" && repoDetails.GetDescription() != "" {
-				activeRepos[repo.GetName()] = RepoActivity{
-					Name:           repoName,
-					LastCommitTime: event.GetCreatedAt(),
-					Description:    repoDetails.GetDescription(),
-					OrgName:        owner,
+				if _, exists := distinctRepos[repo.GetID()]; exists {
+					continue;
+				} else {
+					distinctRepos[repo.GetID()] = true;
+					activeRepos[repo.GetName()] = RepoActivity{
+						Name:           repoName,
+						LastCommitTime: event.GetCreatedAt(),
+						Description:    repoDetails.GetDescription(),
+						OrgName:        owner,
+					}
+
 				}
 			}
 		}
